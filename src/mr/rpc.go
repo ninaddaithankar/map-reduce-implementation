@@ -9,6 +9,8 @@ package mr
 import (
 	"os"
 	"strconv"
+
+	"github.com/google/uuid"
 )
 
 //
@@ -26,12 +28,13 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 type Request struct {
-	Ask string
+	WorkerID uuid.UUID
+	Ask      string
 }
 
 type Response struct {
 	FileName string
-	TaskType string
+	TaskType TaskType
 	NReduce  int
 }
 

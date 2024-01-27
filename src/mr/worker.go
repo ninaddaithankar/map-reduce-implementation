@@ -8,6 +8,8 @@ import (
 	"net/rpc"
 	"os"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Map functions return a slice of KeyValue.
@@ -25,20 +27,22 @@ func ihash(key string) int {
 }
 
 // main/mrworker.go calls this function.
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
-	// Your worker implementation here.
+	// Get an id for this worker
+	workerID := uuid.New()
+	fmt.Println("New worker added with ID : ", workerID)
+
 	for {
 		time.Sleep(time.Second)
-		task, filename, nReduce := RequestForTask()
+		task, filename, nReduce := RequestForTask(workerID)
 
-		if task == "None" {
+		if task == NONE {
 			break
 		}
 
-		// Map task
-		if task == "Map" {
+		// Perform Map
+		if task == MAP {
 			file, err := os.Open(filename)
 			if err != nil {
 				log.Fatalf("cannot open %v", filename)
@@ -48,25 +52,25 @@ func Worker(mapf func(string, string) []KeyValue,
 				log.Fatalf("cannot read %v", filename)
 			}
 			file.Close()
-			kva := mapf(filename, string(content))
 
-			fmt.Print(kva)
+			fmt.Println("Executing MAP for ", filename)
+			kva := mapf(filename, string(content))
+			fmt.Println("Prepared total ", len(kva), " intermediate keys for ", filename)
 		}
 
-		if task == "Reduce" {
+		// Perform Reduce
+		if task == REDUCE {
 			fmt.Print(nReduce)
 		}
 
 	}
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-
 }
 
-func RequestForTask() (string, string, int) {
+func RequestForTask(workerID uuid.UUID) (TaskType, string, int) {
 	req := Request{
-		Ask: "Task",
+		Ask:      "Task",
+		WorkerID: workerID,
 	}
 
 	res := Response{}
