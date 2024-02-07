@@ -29,13 +29,18 @@ type ExampleReply struct {
 // Add your RPC definitions here.
 type Request struct {
 	WorkerID uuid.UUID
-	Ask      string
+	TaskID   uuid.UUID
+	TaskType TaskType
+	Status   TaskState
+	FileName string
 }
 
 type Response struct {
+	TaskID   uuid.UUID
 	FileName string
 	TaskType TaskType
 	NReduce  int
+	Reducer  int
 }
 
 // Cook up a unique-ish UNIX-domain socket name

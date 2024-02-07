@@ -1,16 +1,14 @@
-package queue
+package mr
 
-import "github.com/google/uuid"
+type Queue []TaskInfo
 
-type Queue []uuid.UUID
-
-func (self *Queue) Push(x uuid.UUID) {
+func (self *Queue) Push(x TaskInfo) {
 	*self = append(*self, x)
 }
 
-func (self *Queue) Pop() (uuid.UUID, bool) {
+func (self *Queue) Pop() (TaskInfo, bool) {
 	h := *self
-	var el uuid.UUID
+	var el TaskInfo
 
 	l := len(h)
 	if l > 0 {

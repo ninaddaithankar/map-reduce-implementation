@@ -1,16 +1,26 @@
 package mr
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -35,14 +45,12 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 	for {
 		time.Sleep(time.Second)
-		task, filename, nReduce := RequestForTask(workerID)
+		taskID, task, filename, nReduce, reducer := RequestForTask(workerID)
 
 		if task == NONE {
 			break
-		}
 
-		// Perform Map
-		if task == MAP {
+		} else if task == MAP {
 			file, err := os.Open(filename)
 			if err != nil {
 				log.Fatalf("cannot open %v", filename)
@@ -56,20 +64,83 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			fmt.Println("Executing MAP for ", filename)
 			kva := mapf(filename, string(content))
 			fmt.Println("Prepared total ", len(kva), " intermediate keys for ", filename)
-		}
 
-		// Perform Reduce
-		if task == REDUCE {
-			fmt.Print(nReduce)
+			AddToReduceBuckets(kva, taskID, nReduce)
+
+		} else if task == REDUCE {
+
+			file, err := os.Open(fmt.Sprint("mrinterim-", reducer))
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			var intermediate []KeyValue
+			dec := json.NewDecoder(file)
+			for {
+				var kv KeyValue
+				if err := dec.Decode(&kv); err != nil {
+					break
+				}
+				intermediate = append(intermediate, kv)
+			}
+
+			sort.Sort(ByKey(intermediate))
+
+			oname := fmt.Sprint("mr-out-", reducer)
+			ofile, _ := os.Create(oname)
+
+			//
+			// call Reduce on each distinct key in intermediate[],
+			// and print the result to mr-out-0.
+			//
+			i := 0
+			for i < len(intermediate) {
+				j := i + 1
+				for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, intermediate[k].Value)
+				}
+				output := reducef(intermediate[i].Key, values)
+
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+				i = j
+			}
+
+			ofile.Close()
 		}
 
 	}
 
 }
 
-func RequestForTask(workerID uuid.UUID) (TaskType, string, int) {
+func AddToReduceBuckets(kva []KeyValue, mapTaskId uuid.UUID, nReduce int) {
+	for _, kv := range kva {
+		reduceBucket := ihash(kv.Key) % nReduce
+
+		bucketFileName := fmt.Sprint("mrinterim-", reduceBucket)
+
+		file, ferr := os.OpenFile(bucketFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if ferr != nil {
+			log.Fatal(ferr)
+		}
+
+		enc := json.NewEncoder(file)
+		jerr := enc.Encode(&kv)
+		if jerr != nil {
+			log.Fatal(jerr)
+		}
+
+		file.Close()
+	}
+}
+
+func RequestForTask(workerID uuid.UUID) (uuid.UUID, TaskType, string, int, int) {
 	req := Request{
-		Ask:      "Task",
 		WorkerID: workerID,
 	}
 
@@ -78,12 +149,28 @@ func RequestForTask(workerID uuid.UUID) (TaskType, string, int) {
 	ok := call("Coordinator.GetTask", &req, &res)
 	if ok {
 		fmt.Printf("Task Type: %v \n", res.TaskType)
-		fmt.Printf("File Name: %v \n", res.FileName)
 	} else {
 		fmt.Printf("call failed!\n")
 	}
 
-	return res.TaskType, res.FileName, res.NReduce
+	return res.TaskID, res.TaskType, res.FileName, res.NReduce, res.Reducer
+}
+
+func UpdateTaskStatus(workerID uuid.UUID, taskID uuid.UUID, taskType TaskType, status TaskState, filename string) {
+	req := Request{
+		WorkerID: workerID,
+		TaskID:   taskID,
+		TaskType: taskType,
+		Status:   status,
+		FileName: filename,
+	}
+
+	res := Response{}
+
+	ok := call("Coordinator.ReportTask", &req, &res)
+	if !ok {
+		log.Fatal("Could not report task ", taskType, " : ", taskID, " back to coordinator")
+	}
 }
 
 // send an RPC request to the coordinator, wait for the response.
@@ -105,4 +192,10 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+func checkFileExists(filePath string) bool {
+	_, error := os.Stat(filePath)
+	//return !os.IsNotExist(err)
+	return !errors.Is(error, os.ErrNotExist)
 }
